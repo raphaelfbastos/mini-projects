@@ -19,7 +19,9 @@ class DFA:
 
     def extended_transition_function(self, q:Hashable, w:str):
         """
-        δ^: Q × Σ* → Q
+        δ^: Q × Σ* → Q\n
+        δ^(q, ε) = q\n
+        δ^(q, xa) = δ(δ^(q, x), a)
         """
         if w:
             return self.transition_function[self.extended_transition_function(q, w[:-1]), w[-1]]
@@ -29,23 +31,29 @@ class DFA:
         """
         DFA M accepts w if δ^(s, w) ∈ F
         """
+        # If w contains symbols not in M's alphabet, M cannot accept w.
+        if not set(w).issubset(self.alphabet): return False
         return self.extended_transition_function(self.start_state, w) in self.final_states
     
     def minimize(self):
         """
         Minimizes |Q|
         """
+        # BFS to find reachable states.
         reachable = [self.start_state]
         for q in reachable:
             for a in self.alphabet:
                 qa = self.transition_function[q, a]
                 if qa not in reachable:
                     reachable.append(qa)
+        # Mark pairs p, q such that p, q are distinguishable; (p ∈ F) ∧ (q ∉ F) or (p ∉ F) ∧ (q ∈ F).
         distinguishable = {}
         for i in range(len(reachable)-1):
             for j in range(i+1, len(reachable)):
                 p, q = reachable[i], reachable[j]
                 distinguishable[frozenset({p, q})] = (p in self.final_states) ^ (q in self.final_states)
+        # Mark pairs p, q such that (δ^(p, a) ∈ F) ∧ (δ^(q, a) ∉ F) or (δ^(p, a) ∉ F) ∧ (δ^(q, a) ∈ F).
+        # Continue until no new pairs marked in a cycle.
         new = True
         while new:
             new = False
@@ -59,18 +67,41 @@ class DFA:
                             distinguishable[pair] = True
                             new = True
                             break
+        # Collapse equivalent states.
         equivalent = {q: {q} for q in reachable}
         for pair in distinguishable:
             if not distinguishable[pair]:
                 p, q = pair
                 equivalent[p].add(q)
                 equivalent[q].add(p)
-        return DFA(set(map(frozenset, equivalent.values())), self.alphabet, {(frozenset(equivalent[q]), a): frozenset(equivalent[self.transition_function[q, a]]) for a in self.alphabet for q in reachable}, frozenset(equivalent[self.start_state]), {frozenset(equivalent[q]) for q in self.final_states if q in reachable})
+        return DFA(set(map(frozenset, equivalent.values())),
+                   self.alphabet,
+                   {(frozenset(equivalent[q]), a): frozenset(equivalent[self.transition_function[q, a]]) for a in self.alphabet for q in reachable},
+                   frozenset(equivalent[self.start_state]),
+                   {frozenset(equivalent[q]) for q in self.final_states if q in reachable})
     
-    def __mul__(self, other:DFA):
+    def rename(self):
+        """
+        Returns renamed copy of DFA by traversing its states with a sorted alphabet.
+        """
+        visited = [self.start_state]
+        alphabet = sorted(list(self.alphabet))
+        for q in visited:
+            for a in alphabet:
+                qa = self.transition_function[q, a]
+                if qa not in visited:
+                    visited.append(qa)
+        renamed = dict(zip(visited, range(len(visited))))
+        transitions = {}
+        for (q, a) in self.transition_function:
+            if q in renamed:
+                transitions[renamed[q], a] = renamed[self.transition_function[q, a]]
+        return DFA(renamed.values(), self.alphabet, transitions, renamed[self.start_state], {renamed[q] for q in self.final_states})
+    
+    def __mul__(self, other):
         return ProductMachine(self, other)
     
-    def __add__(self, other:DFA):
+    def __add__(self, other):
         """
         Constructs a Product Machine M=(Q, Σ, δ, s, F) from DFAs M1=(Q1, Σ, δ1, s1, F1) and M2=(Q2, Σ, δ2, s2, F2), where\n
         Q = Q1 × Q2\n
@@ -88,6 +119,20 @@ class DFA:
         F = Q - F'
         """
         return DFA(self.states, self.alphabet, self.transition_function, self.start_state, self.states.difference(self.final_states))
+    
+    def __str__(self):
+        """
+        Returns string of DFA's sorted definition.
+        """
+        M = self.rename()
+        definition = ''
+        definition += f'Q = {{{', '.join(map(str, range(len(M.states))))}}}\n'
+        definition += f'Σ = {{{', '.join(sorted(list(M.alphabet)))}}}\n'
+        for (p, a), q in sorted(M.transition_function.items(), key=lambda x:x[0]):
+            definition += f'δ({p}, {a}) = {q}\n'
+        definition += f's = {M.start_state}\n'
+        definition += f'F = {{{', '.join(map(str, M.final_states))}}}'
+        return definition
 
 class ProductMachine(DFA):
 
@@ -99,6 +144,7 @@ class ProductMachine(DFA):
         s = <s1, s2>\n
         F = F1 × F2
         """
+        # BFS to simulate M1 and M2 simultaneously.
         self.M1 = M1
         self.M2 = M2
         start = (M1.start_state, M2.start_state)
@@ -141,7 +187,9 @@ class NFA:
 
     def extended_transition_function(self, A:set, w:str):
         """
-        Δ^: 𝒫(Q) × Σ* → 𝒫(Q)
+        Δ^: 𝒫(Q) × Σ* → 𝒫(Q)\n
+        Δ^(A, ε) = A\n
+        Δ^(A, xa) = ∪[q ∈ Δ^(A, x)] Δ(q, a)
         """
         if w:
             return {q for p in self.extended_transition_function(A, w[:-1]) if (p, w[-1]) in self.transition_function for q in self.transition_function[p, w[-1]]}
@@ -151,6 +199,8 @@ class NFA:
         """
         NFA N accepts w if Δ^(S, w) ∩ F ≠ ∅
         """
+        # If w contains symbols not in N's alphabet, N cannot accept w.
+        if not set(w).issubset(self.alphabet): return False
         return bool(self.extended_transition_function(self.start_states, w).intersection(self.final_states))
     
     def subset_construction(self):
@@ -161,6 +211,7 @@ class NFA:
         s = S'\n
         F = {A ⊆ Q' | A ∩ F' ≠ ∅}
         """
+        # BFS to find all reachable subsets and construct DFA.
         start = frozenset(self.start_states)
         subsets = [start]
         transitions = {}
@@ -175,7 +226,24 @@ class NFA:
                         final.add(new_subset)
         return DFA(set(subsets), self.alphabet, transitions, start, final)
     
-class eNFA:
+    def __str__(self):
+        """
+        WORK IN PROGRESS will return a string of NFA's sorted definition, currently returns unsorted
+        """
+        renamed = dict(zip(self.states, range(len(self.states))))
+        transition_function = {}
+        for (p, a) in self.transition_function:
+            transition_function[renamed[p], a] = {renamed[q] for q in self.transition_function[p, a]}
+        definition = ''
+        definition += f'Q = {{{', '.join(map(str, range(len(self.states))))}}}\n'
+        definition += f'Σ = {{{', '.join(self.alphabet)}}}\n'
+        for (q, a) in transition_function:
+            definition += f'Δ({q}, {a if a else 'ε'}) = {{{', '.join(map(str, transition_function[q, a]))}}}\n'
+        definition += 'S = {' + ', '.join(map(str, {renamed[q] for q in self.start_states})) + '}\n'
+        definition += 'F = {' + ', '.join(map(str, {renamed[q] for q in self.final_states})) + '}'
+        return definition
+    
+class eNFA(NFA):
 
     def __init__(self, states:set, alphabet:set, transition_function:dict, start_states:set, final_states:set):
         """
@@ -206,7 +274,9 @@ class eNFA:
 
     def extended_transition_function(self, A:set, w:str):
         """
-        Δ^: 𝒫(Q) × Σ* → 𝒫(Q) = {A ⊆ Q | A = ε-Closure(A)}
+        Δ^: 𝒫(Q) × Σ* → 𝒫(Q) = {A ⊆ Q | A = ε-Closure(A)}\n
+        Δ^(A, ε) = A\n
+        Δ^(A, xa) = ∪[q ∈ Δ^(A, x)] ε-Closure(Δ(q, a))
         """
         if w:
             return {q for p in self.extended_transition_function(A, w[:-1]) if (p, w[-1]) in self.transition_function for q in self.epsilon_closure(self.transition_function[p, w[-1]])}
@@ -216,16 +286,19 @@ class eNFA:
         """
         ε-NFA N accepts w if Δ^(S, w) ∩ F ≠ ∅
         """
+        # If w contains symbols not in N's alphabet, N cannot accept w.
+        if not set(w).issubset(self.alphabet): return False
         return bool(self.extended_transition_function(self.start_states, w).intersection(self.epsilon_closure(self.final_states)))
     
     def subset_construction(self):
         """
         Constructs a DFA M=(Q, Σ, δ, s, F) from ε-NFA N=(Q', Σ, Δ, S', F'), where\n
-        Q = 𝒫(Q') = {A ⊆ Q | A = ε-Closure(A)}\n
+        Q = 𝒫(Q') = {A ⊆ Q' | A = ε-Closure(A)}\n
         δ(A, w) = ε-Closure(Δ^(A, w))\n
         s = ε-Closure(S')\n
         F = {A ⊆ Q' | A ∩ ε-Closure(F') ≠ ∅}
         """
+        # BFS to find all reachable subsets and construct DFA.
         start = frozenset(self.epsilon_closure(self.start_states))
         subsets = [start]
         transitions = {}
@@ -250,6 +323,7 @@ def RegExpr2eNFA(regular_expression:str):
     r1*\n
     (r1)
     """
+    # Reverse Polish Notation to convert Regular Expression from infix to postfix.
     evaluation_stack = []
     operator_stack = []
     operators = {'(': 3, '*': 2, '.': 1, '+': 0}
@@ -271,31 +345,35 @@ def RegExpr2eNFA(regular_expression:str):
     while operator_stack:
         evaluation_stack.append(operator_stack.pop())
     eNFAs = []
-    i = 0
+    i = 0 # added states are named numerically
     for r in evaluation_stack:
         match r:
             case '*':
+                # Given r*, construct an ε-NFA N such that L(N) = L(r)*.
                 states1, transitions1, start1, final1 = eNFAs.pop()
                 eNFAs.append(({i} | states1 | {i+1}, {(i, ''): start1 | {i+1}} | transitions1 | {(q, ''): {i+1} for q in final1} | {(i+1, ''): {i}}, {i}, {i+1}))
                 i += 2
             case '.':
+                # Given r1.r2, construct an ε-NFA N such that L(N) = L(r1) • L(r2).
                 states2, transitions2, start2, final2 = eNFAs.pop()
                 states1, transitions1, start1, final1 = eNFAs.pop()
                 eNFAs.append((states1 | states2, transitions1 | {(q, ''): start2 | transitions1.get((q, ''), set()) for q in final1} | transitions2, start1, final2))
             case '+':
+                # Given r1+r2, construct an ε-NFA N such that L(N) = L(r1) ∪ L(r2).
                 states2, transitions2, start2, final2 = eNFAs.pop()
                 states1, transitions1, start1, final1 = eNFAs.pop()
                 eNFAs.append(({i} | states1 | states2, {(i, ''): start1 | start2} | transitions1 | transitions2, {i}, final1 | final2))
                 i += 1
             case _:
+                # Given r, construct an ε-NFA N such that L(N) = L(r).
                 eNFAs.append(({i, i+1}, {(i, r): {i+1}}, {i}, {i+1}))
                 i += 2
     states, transition_function, start_states, final_states = eNFAs[0]
     return eNFA(states, alphabet, transition_function, start_states, final_states)
 
-def eNFA2RegExpr(N:eNFA): # work in progress
+def eNFA2RegExpr(N:eNFA): # WORK IN PROGRESS
     """
-    work in progress
+    WORK IN PROGRESS will construct a Regular Expression from an ε-NFA
     """
     renamed = dict(zip(N.states, range(len(N.states))))
     states = set(range(len(N.states)))
@@ -307,62 +385,4 @@ def eNFA2RegExpr(N:eNFA): # work in progress
         transition_function[q, ''] = {'f'}
     for p in states:
         for r in {transition_function[q, a] for (q, a) in transition_function if q == p}:
-            pass # get all possible states from p 
-
-def printDFA(M:DFA):
-    M = renameDFA(M)
-    print(f'Q = {{{', '.join(map(str, range(len(M.states))))}}}')
-    print(f'Σ = {{{', '.join(sorted(list(M.alphabet)))}}}')
-    for (p, a), q in sorted(M.transition_function.items(), key=lambda x:x[0]):
-        print(f'δ({p}, {a}) = {q}')
-    print(f's = {M.start_state}')
-    print(f'F = {{{', '.join(map(str, M.final_states))}}}')
-
-def renameDFA(M:DFA):
-    visited = [M.start_state]
-    alphabet = sorted(list(M.alphabet))
-    for q in visited:
-        for a in alphabet:
-            qa = M.transition_function[q, a]
-            if qa not in visited:
-                visited.append(qa)
-    renamed = dict(zip(visited, range(len(visited))))
-    transitions = {}
-    for (q, a) in M.transition_function:
-        transitions[renamed[q], a] = renamed[M.transition_function[q, a]]
-    return DFA(renamed.values(), M.alphabet, transitions, renamed[M.start_state], {renamed[q] for q in M.final_states})
-
-def printNFA(N:NFA): # doesn't print in visit order
-    renamed = dict(zip(N.states, range(len(N.states))))
-    transition_function = {}
-    for (p, a) in N.transition_function:
-        transition_function[renamed[p], a] = {renamed[q] for q in N.transition_function[p, a]}
-    print(f'Q = {{{', '.join(map(str, range(len(N.states))))}}}')
-    print(f'Σ = {{{', '.join(N.alphabet)}}}')
-    for (q, a) in transition_function:
-        print(f'Δ({q}, {a if a else 'ε'}) = {{{', '.join(map(str, transition_function[q, a]))}}}')
-    print('S = {' + ', '.join(map(str, {renamed[q] for q in N.start_states})) + '}')
-    print('F = {' + ', '.join(map(str, {renamed[q] for q in N.final_states})) + '}')
-
-# M1 = DFA({'A', 'B', 'C'}, {'0', '1'}, {('A', '0'): 'B', ('A', '1'): 'A', ('B', '0'): 'C', ('B', '1'): 'B', ('C', '0'): 'C', ('C', '1'): 'C'}, 'A', {'C'})
-# M2 = DFA({'S', 'A', 'B', 'C', 'D'}, {'0'}, {('S', '0'): 'A', ('A', '0'): 'B', ('B', '0'): 'C', ('C', '0'): 'D', ('D', '0'): 'A'}, 'S', {'B', 'D'})
-# M3 = DFA({'0', '1', '2', '3', '4', '5', '6', '7'}, {'a', 'b'}, {('0', 'a'): '1', ('0', 'b'): '2', ('1', 'a'): '3', ('1', 'b'): '4', ('2', 'a'): '4', ('2', 'b'): '3', ('3', 'a'): '5', ('3', 'b'): '5', ('4', 'a'): '5', ('4', 'b'): '5', ('5', 'a'): '5', ('5', 'b'): '5', ('6', 'a'): '3', ('6', 'b'): '5', ('7', 'a'): '5', ('7', 'b'): '4'}, '0', {'1', '2', '5'})
-# Q1 = M3.minimize()
-
-# N1 = NFA({'A', 'B'}, {'a', 'b'}, {('A', 'a'): {'A'}, ('A', 'b'): {'B'}}, {'A'}, {'B'}) # has any number of a's followed by a single b
-# C1 = N1.subset_construction()
-
-# M00 = DFA({'A', 'B', 'C'}, {'0', '1'}, {('A', '0'): 'B', ('A', '1'): 'A', ('B', '0'): 'C', ('B', '1'): 'A', ('C', '0'): 'C', ('C', '1'): 'C'}, 'A', {'C'}) # contains 00
-# M02 = DFA({'A', 'B'}, {'0', '1'}, {('A', '0'): 'B', ('A', '1'): 'A', ('B', '0'): 'A', ('B', '1'): 'B'}, 'A', {'A'}) # has an even number of 0's
-# P1 = -M00 * M02 # does not contain 00 AND has an even number of 0's
-# P2 = -M00 + M02 # does not contain 00 OR has an even number of 0's
-
-# E1 = eNFA({'s', 'A', 'B', 'C', 'f'}, {'0', '1'}, {('s', ''): {'A', 'f'}, ('A', '0'): {'B'}, ('B', '1'): {'C'}, ('C', ''): {'f'}, ('f', ''): {'s'}}, {'s'}, {'f'})
-# EC1 = E1.subset_construction()
-
-R1 = RegExpr2eNFA('(0+1)*.0.0.(0+1)*')
-MR1 = R1.subset_construction().minimize()
-printDFA(MR1)
-
-# N = eNFA({'ab', 'cd'}, {'0', '1'}, {('ab', '0'): {'ab'}, ('ab', ''): {'cd'}}, {'ab'}, {'cd'})
-# eNFA2RegExpr(N)
+            pass # get all possible states from p
